@@ -1,0 +1,99 @@
+##################################################################################
+# Docker Compose Configuration for Real-time Cryptocurrency Application
+#
+# Version: 3.8
+# Author: Augusto Bastos
+# Date: 2024-10-05
+#
+# Description:
+# This Docker Compose file sets up a multi-service environment for a real-time 
+# cryptocurrency application. It configures the following services:
+# - 'app': The main Python application that interacts with Redpanda (Kafka) and 
+#   Postgres. The app runs unit tests (via pytest) before starting the main application 
+#   if the tests pass successfully.
+# - 'postgres': A PostgreSQL database to store cryptocurrency data.
+# - 'redpanda': A Redpanda (Kafka-compatible) broker used for real-time data streaming.
+# - 'export_data': A service to export the stored cryptocurrency data from Postgres 
+#   to CSV and Parquet files, allowing manual or automatic data exports.
+#
+# The application connects to Redpanda for message brokering and Postgres for data 
+# storage. The app service is dependent on Redpanda and Postgres and only runs 
+# once they are available. All services communicate over the 'realtime_network'.
+#
+# Usage:
+# To build and run the application, use the command:
+#   docker-compose up --build
+# The command runs the tests first, and if they pass, it runs the main app.
+#
+# To manually export the data to CSV and Parquet formats, use the command:
+#   docker-compose run export_data
+#
+# To stop the services and export data before shutting down, use:
+#   docker-compose down
+#
+# Environment Variables:
+# - KAFKA_BROKER: The Redpanda broker address.
+# - POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD: 
+#   Credentials and connection details for the Postgres service.
+##################################################################################
+version: '3.8'
+services:
+  app:
+    build: .
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Mount Docker socket from the host
+      - ./data_export:/app/data_export  # Mount local folder to export data
+    environment:
+      KAFKA_BROKER: redpanda:9092
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command: >
+      sh -c "until pg_isready -h $${POSTGRES_HOST} -p $${POSTGRES_PORT} -U $${POSTGRES_USER} -d $${POSTGRES_DB}; do
+      echo waiting for postgres; sleep 2; done &&
+      pytest test_docker_compose.py && echo 'Tests passed, running the app' && python init.py"
+    depends_on:
+      - postgres
+      - redpanda
+    networks:
+      - realtime_network
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    networks:
+      - realtime_network
+
+  redpanda:
+    image: vectorized/redpanda:v23.1.2
+    command: redpanda start --overprovisioned --smp 1 --memory 1G --reserve-memory 0M --node-id 0 --check=false \
+      --kafka-addr PLAINTEXT://0.0.0.0:9092 --advertise-kafka-addr PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+    networks:
+      - realtime_network
+
+  export_data:
+    build: .
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data_export:/app/data_export
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command: python export_data.py
+    networks:
+      - realtime_network
+
+networks:
+  realtime_network:
+    driver: bridge

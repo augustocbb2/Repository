@@ -1,0 +1,9 @@
+kafka-python
+psycopg2
+schedule
+requests
+docker
+pytest
+sqlalchemy
+pandas
+python-dotenv
